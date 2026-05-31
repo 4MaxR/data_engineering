@@ -172,4 +172,4 @@ This project helped strengthen practical skills in:
 * Automated monitoring and alerting
 
 ```
-```
+
