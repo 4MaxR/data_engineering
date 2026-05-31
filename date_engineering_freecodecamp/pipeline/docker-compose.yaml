@@ -1,41 +1,77 @@
 services:
   source_postgres:
-    image: postgres:latest
-    posts:
-      -"5433:5432"
+    image: postgres:15
+    ports:
+      - "5433:5432"
     networks:
       - elt_network
     environment:
-      - POSTGRES_DB: source_db
-      - POSTGRES_USER: postgres
-      - POSTGRES_PASSWORD: secret
+      POSTGRES_DB: ${SOURCE_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - ./source_db_init/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${SOURCE_DB}"]
+      interval: 5s
+      retries: 5
 
-
-destination_postgres:
-    image: postgres:latest
-    posts:
-      -"5434:5432"
+  destination_postgres:
+    image: postgres:15
+    ports:
+      - "5434:5432"
     networks:
       - elt_network
     environment:
-      POSTGRES_DB: destination_db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: ${DESTINATION_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${DESTINATION_DB}"]
+      interval: 5s
+      retries: 5
 
-elt_script:
-  build:
-    context: ./elt_script
-    dockerfile: Dockerfile
-  command: ["python", "elt_script.py"]
-  networks:
-    - elt_network
-  depends_on:
-    - source_postgres
-    - destination_postgres
-
-
+  elt_script:
+    build:
+      context: ./elt
+      dockerfile: Dockerfile
+    command: ["python", "elt_script.py"]
+    networks:
+      - elt_network
+    depends_on:
+      source_postgres:
+        condition: service_healthy
+      destination_postgres:
+        condition: service_healthy
+    environment:
+      # Pass .env variables into the container so Python can read them
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      SOURCE_DB: ${SOURCE_DB}
+      SOURCE_HOST: ${SOURCE_HOST}
+      DESTINATION_DB: ${DESTINATION_DB}
+      DESTINATION_HOST: ${DESTINATION_HOST}
+    # Alternatively, mount a .env file into the container (see note below)
+  dbt:
+    image: ghcr.io/dbt-labs/dbt-postgres:1.8.2
+    command: 
+      [
+        "run",
+        "--profiles-dir",
+        "/root",
+        "--project-dir",
+        "/dbt"
+      ]
+    networks:
+      - elt_network
+    volumes:
+      - ./custom_postgres:/dbt
+      - ~/.dbt:/root
+    depends_on:
+      - elt_script
+    environment:
+      DBT_PROFILE: custom_postgres
+      DBT_TARGET: dev
 
 networks:
   elt_network:
